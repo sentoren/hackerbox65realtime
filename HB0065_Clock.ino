@@ -5,6 +5,22 @@
 #include "RTClib.h"
 #include <MatrixHardware_ESP32_V0.h>    
 #include <SmartMatrix.h>
+#include <WiFi.h>
+#include "time.h"
+
+const char* ssid       = "YOUR_INTERNET_SSID";
+const char* password   = "YOUR_PASSWORD";
+
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = -28800;
+const int   daylightOffset_sec = 0;
+
+int yr = 0;
+int mt = 0;
+int dy = 0;
+int hr = 0;
+int mi = 0;
+int se = 0;
 
 #define COLOR_DEPTH 24                  // Choose the color depth used for storing pixels in the layers: 24 or 48 (24 is good for most sketches - If the sketch uses type `rgb24` directly, COLOR_DEPTH must be 24)
 const uint16_t kMatrixWidth = 64;       // Set to the width of your display, must be a multiple of 8
@@ -22,7 +38,7 @@ SMARTMATRIX_ALLOCATE_INDEXED_LAYER(indexedLayer3, kMatrixWidth, kMatrixHeight, C
 
 RTC_DS1307 rtc;
 const int defaultBrightness = (50*255)/100;     // dim: 35% brightness
-char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+char daysOfTheWeek[7][12] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 char monthsOfTheYr[12][4] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JLY", "AUG", "SPT", "OCT", "NOV", "DEC"};
 
 void setup() {
@@ -45,6 +61,35 @@ void setup() {
     // January 21, 2014 at 3am you would call:
     // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
   }
+
+   //connect to WiFi
+  Serial.printf("Connecting to %s ", ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+  }
+  Serial.println(" CONNECTED");
+  
+  //init and get the time
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  // gets time from NTP Server and syncs RTC clock
+  struct tm timeinfo;
+  getLocalTime(&timeinfo);
+
+  yr = timeinfo.tm_year + 1900;
+  mt = timeinfo.tm_mon + 1;
+  dy = timeinfo.tm_mday;
+  hr = timeinfo.tm_hour;
+  mi = timeinfo.tm_min;
+  se = timeinfo.tm_sec;
+
+  rtc.adjust(DateTime(yr, mt, dy, hr, mi, se));
+
+  //disconnect WiFi as it's no longer needed
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
 
   // setup matrix
   matrix.addLayer(&indexedLayer1); 
@@ -71,7 +116,7 @@ void loop() {
   indexedLayer1.swapBuffers();
   indexedLayer2.setFont(font8x13);
   indexedLayer2.setIndexedColor(1,{0xff, 0xff, 0x00});
-  indexedLayer2.drawString(0, 11, 1, daysOfTheWeek[now.dayOfTheWeek()]);
+  indexedLayer2.drawString(20, 11, 1, daysOfTheWeek[now.dayOfTheWeek()]);
   indexedLayer2.swapBuffers();
   sprintf(txtBuffer, "%02d %s %04d", now.day(), monthsOfTheYr[(now.month()-1)], now.year());
   indexedLayer3.setFont(font5x7);
