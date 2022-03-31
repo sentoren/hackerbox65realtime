@@ -7,9 +7,11 @@
 #include <SmartMatrix.h>
 #include <WiFi.h>
 #include "time.h"
+#include <OpenWeatherOneCall.h>
 
-const char* ssid       = "YOUR_INTERNET_SSID";
+const char* ssid       = "YOUR_INTERNET";
 const char* password   = "YOUR_PASSWORD";
+#define ONECALLKEY "YOUR_API_KEY"
 
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = -28800;
@@ -30,16 +32,42 @@ const uint8_t kDmaBufferRows = 4;       // known working: 2-4, use 2 to save RAM
 const uint8_t kPanelType = SM_PANELTYPE_HUB75_32ROW_MOD16SCAN;   // Choose the configuration that matches your panels.  See more details in MatrixCommonHub75.h and the docs: https://github.com/pixelmatix/SmartMatrix/wiki
 const uint32_t kMatrixOptions = (SM_HUB75_OPTIONS_NONE);        // see docs for options: https://github.com/pixelmatix/SmartMatrix/wiki
 const uint8_t kIndexedLayerOptions = (SM_INDEXED_OPTIONS_NONE);
+const uint8_t kBackgroundLayerOptions = (SM_BACKGROUND_OPTIONS_NONE);
 
 SMARTMATRIX_ALLOCATE_BUFFERS(matrix, kMatrixWidth, kMatrixHeight, kRefreshDepth, kDmaBufferRows, kPanelType, kMatrixOptions);
 SMARTMATRIX_ALLOCATE_INDEXED_LAYER(indexedLayer1, kMatrixWidth, kMatrixHeight, COLOR_DEPTH, kIndexedLayerOptions);
 SMARTMATRIX_ALLOCATE_INDEXED_LAYER(indexedLayer2, kMatrixWidth, kMatrixHeight, COLOR_DEPTH, kIndexedLayerOptions);
 SMARTMATRIX_ALLOCATE_INDEXED_LAYER(indexedLayer3, kMatrixWidth, kMatrixHeight, COLOR_DEPTH, kIndexedLayerOptions);
+SMARTMATRIX_ALLOCATE_INDEXED_LAYER(indexedLayer4, kMatrixWidth, kMatrixHeight, COLOR_DEPTH, kIndexedLayerOptions);
+SMARTMATRIX_ALLOCATE_INDEXED_LAYER(indexedLayer5, kMatrixWidth, kMatrixHeight, COLOR_DEPTH, kIndexedLayerOptions);
+SMARTMATRIX_ALLOCATE_BACKGROUND_LAYER(backgroundLayer, kMatrixWidth, kMatrixHeight, COLOR_DEPTH, kBackgroundLayerOptions);
 
 RTC_DS1307 rtc;
 const int defaultBrightness = (50*255)/100;     // dim: 35% brightness
-char daysOfTheWeek[7][12] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-char monthsOfTheYr[12][4] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JLY", "AUG", "SPT", "OCT", "NOV", "DEC"};
+char daysOfTheWeek[7][4] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+char monthsOfTheYr[12][4] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+
+OpenWeatherOneCall OWOC;
+unsigned long previousMillis = 0;
+const unsigned long interval = 1UL*60UL*60UL*1000UL; //1hour
+float tempString;
+
+// WiFi Connect function **********************************
+void connectWifi() {
+  WiFi.begin(ssid, password);
+  printf("Connecting.");
+  int TryNum = 0;
+  while (WiFi.status() != WL_CONNECTED) {
+    printf(".");
+    delay(200);
+    TryNum++;
+    if (TryNum > 20) {
+      printf("\nUnable to connect to WiFi. Please check your parameters.\n");
+      for (;;);
+    }
+  }
+  printf("Connected to: % s\n\n", ssid);
+} //================== END WIFI CONNECT =======================
 
 void setup() {
   Serial.begin(57600);
@@ -62,14 +90,10 @@ void setup() {
     // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
   }
 
-   //connect to WiFi
-  Serial.printf("Connecting to %s ", ssid);
-  WiFi.begin(ssid, password);
+  // WiFi Connection required *********************
   while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-  }
-  Serial.println(" CONNECTED");
+    connectWifi();
+  } //<----------------End WiFi Connection Check
   
   //init and get the time
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
@@ -87,14 +111,32 @@ void setup() {
 
   rtc.adjust(DateTime(yr, mt, dy, hr, mi, se));
 
+  //Weather call setup
+  OWOC.setOpenWeatherKey(ONECALLKEY);
+  OWOC.setExcl(EXCL_M+EXCL_D+EXCL_H+EXCL_A);
+  OWOC.setLatLon();
+  OWOC.parseWeather();
+
+  printf("\nLocation: % s, % s % s\n", OWOC.location.CITY, OWOC.location.STATE, OWOC.location.COUNTRY);
+  //Verify all other values exist before using
+    if (OWOC.current)
+    {
+        tempString = OWOC.current->temperature;
+        printf("Current Temp : % .0f\n", tempString);
+        printf("Current Humidity : % .0f\n", OWOC.current->humidity);
+    }
+
   //disconnect WiFi as it's no longer needed
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
 
   // setup matrix
+  matrix.addLayer(&backgroundLayer);
   matrix.addLayer(&indexedLayer1); 
   matrix.addLayer(&indexedLayer2);
   matrix.addLayer(&indexedLayer3);
+  matrix.addLayer(&indexedLayer4);
+  matrix.addLayer(&indexedLayer5);
   matrix.begin();
 
   matrix.setBrightness(defaultBrightness);
@@ -102,12 +144,20 @@ void setup() {
 
 void loop() {
   char txtBuffer[12];
+  char tempBuffer[4];
   DateTime now = rtc.now();
 
   // clear screen before writing new text
+  backgroundLayer.fillScreen({0,0,0});
   indexedLayer1.fillScreen(0);
   indexedLayer2.fillScreen(0);
   indexedLayer3.fillScreen(0);
+  indexedLayer4.fillScreen(0);
+  indexedLayer5.fillScreen(0);
+
+  backgroundLayer.fillCircle(32, 17, 4, {0xff, 0xff, 0x00}, {0x05, 0xfd, 0xe8});
+  backgroundLayer.drawRectangle(0,0,63,31,{0xff, 0xff, 0x00});
+  backgroundLayer.swapBuffers();
 
   sprintf(txtBuffer, "%02d:%02d:%02d", (now.hour()+1), now.minute(), now.second());
   indexedLayer1.setFont(font8x13);
@@ -116,13 +166,47 @@ void loop() {
   indexedLayer1.swapBuffers();
   indexedLayer2.setFont(font8x13);
   indexedLayer2.setIndexedColor(1,{0xff, 0xff, 0x00});
-  indexedLayer2.drawString(20, 11, 1, daysOfTheWeek[now.dayOfTheWeek()]);
+  indexedLayer2.drawString(4, 11, 1, daysOfTheWeek[now.dayOfTheWeek()]);
   indexedLayer2.swapBuffers();
   sprintf(txtBuffer, "%02d %s %04d", now.day(), monthsOfTheYr[(now.month()-1)], now.year());
   indexedLayer3.setFont(font5x7);
   indexedLayer3.setIndexedColor(1,{0xbf, 0x6b, 0x41});
   indexedLayer3.drawString(5, 25, 1, txtBuffer); 
   indexedLayer3.swapBuffers();
+  indexedLayer4.setFont(font8x13);
+  indexedLayer4.setIndexedColor(1,{0xff, 0xff, 0x00});
+  sprintf(tempBuffer, "%d", (int)tempString, (int)(tempString*100)%100);
+  indexedLayer4.drawString(40, 11, 1, tempBuffer);
+  indexedLayer4.swapBuffers();
+  indexedLayer5.setFont(font3x5);
+  indexedLayer5.setIndexedColor(1,{0xff, 0xff, 0x00});
+  indexedLayer5.drawString(55, 11, 1, "o");
+  indexedLayer5.swapBuffers();
 
   delay(500);
+
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - previousMillis >= interval) {
+    // save the time you should have toggled the LED
+    previousMillis += interval;
+
+    while (WiFi.status() != WL_CONNECTED) {
+      connectWifi();
+  
+      OWOC.parseWeather();
+  
+      printf("\nLocation: % s, % s % s\n", OWOC.location.CITY, OWOC.location.STATE, OWOC.location.COUNTRY);
+      //Verify all other values exist before using
+      if (OWOC.current)
+      {
+        String tempString = String(OWOC.current->temperature,1);
+        String humidityString = String(OWOC.current->humidity,0);
+        printf("Current Temp : % .0f\n", tempString);
+        printf("Current Humidity : % .0f\n", humidityString);
+      }
+    }
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  }
 }
