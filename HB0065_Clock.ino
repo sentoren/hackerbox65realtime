@@ -200,10 +200,9 @@ void loop() {
       //Verify all other values exist before using
       if (OWOC.current)
       {
-        String tempString = String(OWOC.current->temperature,1);
-        String humidityString = String(OWOC.current->humidity,0);
+        tempString = OWOC.current->temperature;
         printf("Current Temp : % .0f\n", tempString);
-        printf("Current Humidity : % .0f\n", humidityString);
+        printf("Current Humidity : % .0f\n", OWOC.current->humidity);
       }
     }
   WiFi.disconnect(true);
